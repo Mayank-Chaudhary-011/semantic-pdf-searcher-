@@ -1,0 +1,70 @@
+/* ═══════════════════════════════════════════════
+   BASE RESET & ROOT VARIABLES — Study PDF Search
+   NOTE: Component-level styles are injected via
+   inline <style> tags in MainApp.jsx / AuthPage.jsx.
+   Only put truly global, non-conflicting rules here.
+═══════════════════════════════════════════════ */
+
+:root {
+  --font-body: 'Inter', system-ui, sans-serif;
+  --font-display: 'Outfit', system-ui, sans-serif;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px hsla(0,0%,0%,0.3), 0 1px 2px hsla(0,0%,0%,0.2);
+  --shadow-md: 0 4px 16px hsla(0,0%,0%,0.4), 0 2px 6px hsla(0,0%,0%,0.25);
+  --shadow-lg: 0 12px 40px hsla(0,0%,0%,0.5), 0 4px 12px hsla(0,0%,0%,0.3);
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-2xl: 24px;
+
+  /* Transitions */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* ─── Reset & Base ─────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* React mount point fills full height */
+#root {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── Floating dot animation ──────────────────────────────── */
+@keyframes float-dot {
+  0%, 100% { transform: translateY(0px) scale(1); opacity: 0.9; }
+  50% { transform: translateY(-6px) scale(1.1); opacity: 1; }
+}
+.dot-1 { animation: float-dot 1.2s ease-in-out infinite; }
+.dot-2 { animation: float-dot 1.2s ease-in-out infinite 0.15s; }
+.dot-3 { animation: float-dot 1.2s ease-in-out infinite 0.3s; }
+
+/* ─── Slide-in animation ──────────────────────────────────── */
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-in { animation: slide-up 0.4s var(--ease-out) forwards; }
+
