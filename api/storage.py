@@ -14,7 +14,7 @@ from supabase import create_client, Client
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-BUCKET = "pdfs"
+BUCKET = "PDF"
 
 
 @lru_cache(maxsize=1)
