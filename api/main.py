@@ -1,26 +1,8 @@
-# ============================================================
-# main.py
-# ------------------------------------------------------------
-# Purpose: FastAPI app that exposes our pipeline as HTTP endpoints.
-#
-#   POST   /ingest       — upload a PDF, run the full ingestion pipeline
-#   POST   /search        — semantic search, returns chunks + bounding boxes
-#   GET    /pdf/{id}      — serve the actual PDF file for the viewer
-#   GET    /pdfs          — list the current user's PDFs
-#   DELETE /pdfs/{id}     — delete a PDF (and its chunks) owned by the user
-#   GET    /health         — health check
-#
-# Every route below is scoped to the logged-in user via
-# get_current_user_id(), which verifies the Supabase JWT sent
-# in the Authorization header. There is no more shared
-# TEST_USER_ID — each of your pilot users only ever sees and
-# touches their own documents.
-# ============================================================
-
 import os
 import sys
 import shutil
 import uuid
+import tempfile
 
 from dotenv import load_dotenv
 
@@ -178,10 +160,6 @@ async def search(
 
     enriched = []
     for r in results:
-        # Ownership check is implicit here: search_pdf() only ever
-        # searches the calling user's own turbovec index, so results
-        # can only belong to this user's PDFs. We still scope this
-        # lookup by user_id as defense in depth.
         cur.execute(
             "SELECT filename, file_path FROM pdfs WHERE id = %s AND user_id = %s",
             (str(r["pdf_id"]), user_id),
@@ -194,11 +172,31 @@ async def search(
         original_filename = pdf_row[0]
         file_path = pdf_row[1]
 
-        boxes = find_passage_boxes(
-            pdf_path=file_path,
-            page_number=r["page_number"],
-            search_text=r["chunk_text"],
-        )
+        # highlighter needs a real local file path — download from
+        # Supabase Storage to a temp file if this is a remote path
+        is_local = os.path.isabs(file_path) or file_path.startswith(".")
+        tmp_file = None
+        try:
+            if is_local:
+                pdf_local_path = file_path
+            else:
+                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+                tmp_file.write(storage_download(file_path))
+                tmp_file.flush()
+                tmp_file.close()
+                pdf_local_path = tmp_file.name
+
+            boxes = find_passage_boxes(
+                pdf_path=pdf_local_path,
+                page_number=r["page_number"],
+                search_text=r["chunk_text"],
+            )
+        except Exception as e:
+            print(f"[/search] Warning: could not get bounding boxes: {e}", flush=True)
+            boxes = []
+        finally:
+            if tmp_file and os.path.exists(tmp_file.name):
+                os.unlink(tmp_file.name)
 
         enriched.append({
             "pdf_id":            str(r["pdf_id"]),
@@ -336,13 +334,10 @@ async def delete_pdf(
         try:
             from vectorstore.turbovec_store import load_or_create_index, remove_chunks, save_index
 
-            index = load_or_create_index(user_id, dim=EMBEDDER.model.get_sentence_embedding_dimension())
+            index = load_or_create_index(user_id, dim=EMBEDDER.model.get_embedding_dimension())
             remove_chunks(index, chunk_ids)
             save_index(index, user_id)
         except Exception as e:
-            # Don't fail the whole delete over an index cleanup issue —
-            # log it so it's visible, but the PDF is already gone from
-            # Postgres and disk either way.
             print(f"[delete_pdf] Warning: could not clean up turbovec index: {e}")
 
     return {"success": True}
