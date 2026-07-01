@@ -1,36 +1,20 @@
-# ============================================================
-# db.py
-# ------------------------------------------------------------
-# Purpose: Handle all communication between our Python code and
-# the Supabase Postgres database — inserting PDFs, inserting
-# chunks with their embeddings, and searching them.
-#
-# SECURITY NOTE (updated): this still uses the SERVICE_ROLE key,
-# which bypasses Row Level Security — but that's now fine, because
-# main.py verifies each request's Supabase JWT via auth.py before
-# any of these functions are ever called, and every query here is
-# scoped by the verified user_id. The service_role key is the
-# backend's own credential to talk to Postgres; the JWT check is
-# what proves *which* user is making the request.
-# ============================================================
+
 
 import os
 import psycopg2
 from dotenv import load_dotenv
-
+from pgvector.psycopg2 import register_vector
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
-def get_connection():
-    """
-    Opens a new connection to the Postgres database.
 
-    Returns:
-        a psycopg2 connection object
-    """
-    return psycopg2.connect(DATABASE_URL)
+
+def get_connection():
+    conn = psycopg2.connect(DATABASE_URL)
+    register_vector(conn)
+    return conn
 
 
 def insert_pdf(user_id, filename, file_path, total_pages):
