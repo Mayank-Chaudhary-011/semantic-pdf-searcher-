@@ -28,7 +28,7 @@ from dotenv import load_dotenv
 # (including SUPABASE_JWT_SECRET used in auth.py)
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -71,29 +71,12 @@ app.add_middleware(
 
 
 # ============================================================
-# POST /ingest
+# POST /ingest  — accepts file and returns 202 immediately.
+# The actual PDF processing happens in the background so the
+# browser never times out on large PDFs.
 # ============================================================
-@app.post("/ingest")
-async def ingest(
-    file: UploadFile = File(...),
-    user_id: str = Depends(get_current_user_id),
-):
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
-
-    clean_filename = os.path.basename(
-        file.filename.replace("/", os.sep).replace("\\", os.sep)
-    )
-
-    unique_name = f"{uuid.uuid4()}_{clean_filename}"
-    # Save temporarily to disk so the ingestion pipeline can read it
-    save_path = os.path.join(UPLOAD_DIR, unique_name)
-
-    with open(save_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    print(f"[/ingest] Saved temp file: {save_path}")
-
+def _run_ingestion(save_path: str, clean_filename: str, unique_name: str, user_id: str):
+    """Background task: embed, store chunks, upload to Supabase Storage."""
     try:
         pdf_id = ingest_pdf(
             pdf_path=save_path,
@@ -104,23 +87,20 @@ async def ingest(
     except Exception as e:
         import traceback
         traceback.print_exc()
-        # Clean up the temp file on failure
+        print(f"[ingest_bg] ERROR during ingestion: {e}", flush=True)
         if os.path.exists(save_path):
             os.remove(save_path)
-        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
+        return
 
-    # ── Upload to Supabase Storage ──────────────────────────────────────────
+    # Upload to Supabase Storage
     try:
         with open(save_path, "rb") as f:
             pdf_bytes = f.read()
         storage_path = storage_upload(user_id, unique_name, pdf_bytes)
     except Exception as e:
-        print(f"[/ingest] WARNING: Supabase Storage upload failed: {e}", flush=True)
-        # Fall back: keep the local path so the PDF is still usable locally
-        storage_path = save_path
+        print(f"[ingest_bg] WARNING: Supabase Storage upload failed: {e}", flush=True)
+        storage_path = save_path  # fallback to local path
     else:
-        # Successfully stored in Supabase — update DB with storage path
-        # and remove the local temp file
         conn = get_connection()
         cur = conn.cursor()
         cur.execute(
@@ -130,14 +110,40 @@ async def ingest(
         conn.commit()
         cur.close()
         conn.close()
-        os.remove(save_path)
-        print(f"[/ingest] Temp file removed, PDF stored in Supabase at: {storage_path}")
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        print(f"[ingest_bg] PDF stored in Supabase at: {storage_path}", flush=True)
+
+    print(f"[ingest_bg] Done — pdf_id={pdf_id}", flush=True)
+
+
+@app.post("/ingest", status_code=202)
+async def ingest(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
+):
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+
+    clean_filename = os.path.basename(
+        file.filename.replace("/", os.sep).replace("\\", os.sep)
+    )
+    unique_name = f"{uuid.uuid4()}_{clean_filename}"
+    save_path = os.path.join(UPLOAD_DIR, unique_name)
+
+    with open(save_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    print(f"[/ingest] File saved, queuing background ingestion: {clean_filename}", flush=True)
+
+    # Return immediately — process in background
+    background_tasks.add_task(_run_ingestion, save_path, clean_filename, unique_name, user_id)
 
     return {
         "success": True,
-        "pdf_id": str(pdf_id),
         "filename": clean_filename,
-        "message": "PDF ingested successfully.",
+        "message": "PDF received and is being processed. Poll /pdfs to see when it appears.",
     }
 
 

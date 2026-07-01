@@ -47,7 +47,7 @@ def ingest_pdf(pdf_path, user_id, filename=None, embedder=None):
     print("[3/5] Using embedding model...")
 
     conn = get_connection()
-    index = load_or_create_index(user_id, dim=embedder.model.get_sentence_embedding_dimension())
+    index = load_or_create_index(user_id, dim=embedder.model.get_embedding_dimension())
 
     total_chunks_created = 0
 
