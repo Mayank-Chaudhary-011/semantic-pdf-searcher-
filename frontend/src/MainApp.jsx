@@ -437,6 +437,7 @@ export default function MainApp({ user, onSignOut }) {
           throw new Error(body.detail ?? "Upload failed");
         }
       }
+      fetchMyPdfs();
     } catch (err) {
       if (err.message === "NOT_LOGGED_IN") {
         setAppError("Session expired — please sign out and sign in again.");
