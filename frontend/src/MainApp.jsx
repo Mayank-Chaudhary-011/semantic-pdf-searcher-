@@ -366,7 +366,7 @@ function PDFViewerContent({
         {pdfBlobUrl && pageWidth > 0 && (
           <Document
             file={pdfBlobUrl}
-            onLoadSuccess={({ numPages: n }) => numPages !== n && null}
+            onLoadSuccess={({ numPages }) => setNumPages(numPages)}
           >
             <div
               style={{
@@ -1089,6 +1089,7 @@ export default function MainApp({ user, onSignOut }) {
                 pdfBlobUrl={pdfBlobUrl}
                 pageWidth={pageWidth}
                 numPages={numPages}
+                setNumPages={setNumPages}
                 pageDimensions={pageDimensions}
                 loadedPdfId={loadedPdfId}
                 activeBoxes={activeBoxes}
