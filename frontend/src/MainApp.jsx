@@ -12,6 +12,9 @@ import {
   X,
   Trash2,
   Library,
+  FolderOpen,
+  ChevronLeft,
+  Menu,
 } from "lucide-react";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -27,14 +30,9 @@ const MAX_PAGE_WIDTH = 820;
 const PAGE_PADDING = 48;
 
 // Every backend route now requires a valid Supabase session token.
-// This pulls the current (auto-refreshed) access token and returns it
-// as an Authorization header to spread into fetch() calls.
 async function authHeaders() {
-  // getSession() returns the cached session; refreshSession() fetches a new
-  // one if needed. Use getSession first, fall back to refresh.
   let { data: { session } } = await supabase.auth.getSession();
 
-  // If the cached session is missing or expired, try an explicit refresh
   if (!session?.access_token) {
     const { data: refreshed } = await supabase.auth.refreshSession();
     session = refreshed?.session ?? null;
@@ -97,7 +95,40 @@ const GLOBAL_CSS = `
   .fade-up { animation: fadeUp 0.22s ease forwards; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes slideIn { from { transform: translateX(-100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .slide-up { animation: slideUp 0.28s cubic-bezier(0.22,1,0.36,1) forwards; }
+
+  /* ── Mobile responsive ── */
+  @media (max-width: 767px) {
+    .desktop-only { display: none !important; }
+    .mobile-sidebar { width: 100% !important; }
+    .mobile-viewer-sheet {
+      position: fixed !important;
+      inset: 0 !important;
+      z-index: 50 !important;
+      background: ${T.cream};
+      display: flex;
+      flex-direction: column;
+    }
+    .header-email { display: none !important; }
+    .header-actions { gap: 5px !important; }
+    .header-actions .btn-ghost,
+    .header-actions .btn-primary { padding: 5px 8px !important; font-size: 11px !important; }
+  }
+  @media (min-width: 768px) {
+    .mobile-only { display: none !important; }
+  }
 `;
+
+function useWindowWidth() {
+  const [width, setWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
+  useEffect(() => {
+    const handler = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
+  return width;
+}
 
 function useViewerWidth() {
   const [width, setWidth] = useState(0);
@@ -234,6 +265,11 @@ export default function MainApp({ user, onSignOut }) {
   const [myPdfs, setMyPdfs] = useState([]);
   const [pdfsLoading, setPdfsLoading] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  // Mobile: "results" | "viewer"
+  const [mobileView, setMobileView] = useState("results");
+
+  const windowWidth = useWindowWidth();
+  const isMobile = windowWidth < 768;
 
   const fileInputRef = useRef(null);
   const folderInputRef = useRef(null);
@@ -242,8 +278,6 @@ export default function MainApp({ user, onSignOut }) {
   const isScrolling = useRef(false);
 
   const [pageWidth, viewerWidthRef] = useViewerWidth();
-  // Memoised so the array reference is stable — avoids re-running the scroll
-  // effect on every render just because `|| []` creates a new array each time.
   const activeBoxes = React.useMemo(
     () => selectedResult?.bounding_boxes || [],
     [selectedResult]
@@ -353,7 +387,7 @@ export default function MainApp({ user, onSignOut }) {
           "Content-Type": "application/json",
           ...(await authHeaders()),
         },
-        body: JSON.stringify({ query, top_k: 5 }),
+        body: JSON.stringify({ query, top_k: 8 }),
       });
       if (!res.ok) throw new Error();
       const data = await res.json();
@@ -370,6 +404,9 @@ export default function MainApp({ user, onSignOut }) {
     setSelectedResult(result);
     isScrolling.current = false;
     setAppError(null);
+
+    // On mobile: switch to viewer panel
+    if (isMobile) setMobileView("viewer");
 
     if (!isSamePdf) {
       setPdfBlobUrl(null);
@@ -417,8 +454,6 @@ export default function MainApp({ user, onSignOut }) {
         });
         const formData = new FormData();
         formData.append("file", file);
-        // Note: no Content-Type header here on purpose — the browser sets
-        // the correct multipart boundary automatically for FormData.
         let headers;
         try {
           headers = await authHeaders();
@@ -462,12 +497,205 @@ export default function MainApp({ user, onSignOut }) {
     ? Math.round((uploadStatus.current / uploadStatus.total) * 100)
     : 0;
 
+  // ── PDF Viewer panel (reused on both desktop & mobile sheet) ─────────────
+  function PDFViewerContent() {
+    return (
+      <>
+        {/* Viewer sub-header */}
+        <div
+          style={{
+            height: 46,
+            flexShrink: 0,
+            borderBottom: `1px solid ${T.border}`,
+            background: T.white,
+            display: "flex",
+            alignItems: "center",
+            padding: "0 16px",
+            gap: 8,
+          }}
+        >
+          {/* Mobile back button */}
+          {isMobile && (
+            <button
+              onClick={() => setMobileView("results")}
+              className="btn-ghost mobile-only"
+              style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", marginRight: 4 }}
+            >
+              <ChevronLeft size={14} /> Results
+            </button>
+          )}
+          {selectedResult ? (
+            <>
+              <FileText size={12} color={T.amber} />
+              <span
+                style={{
+                  fontSize: 12,
+                  color: T.inkMid,
+                  fontWeight: 500,
+                  flex: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {selectedResult.original_filename}
+              </span>
+              <span
+                style={{
+                  fontSize: 10,
+                  color: T.inkFaint,
+                  padding: "2px 7px",
+                  borderRadius: 99,
+                  background: T.sidebarBg,
+                  border: `1px solid ${T.border}`,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  flexShrink: 0,
+                }}
+              >
+                p. {selectedResult.page_number}
+              </span>
+            </>
+          ) : (
+            <span style={{ fontSize: 12, color: T.inkFaint }}>
+              Select a result to view the document
+            </span>
+          )}
+        </div>
+
+        {/* PDF canvas area */}
+        <div
+          ref={(node) => {
+            viewerRef.current = node;
+            viewerWidthRef(node);
+          }}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            overflowY: "auto",
+            overflowX: "auto",
+            background: T.cream,
+            padding: "24px 24px 48px",
+          }}
+        >
+          {!selectedResult && (
+            <div
+              style={{
+                minHeight: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <EmptyState
+                icon={FileText}
+                title="Open a document"
+                subtitle="Click any search result on the left to load the document and jump to the matching passage."
+              />
+            </div>
+          )}
+          {selectedResult && !pdfBlobUrl && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginTop: 80,
+                justifyContent: "center",
+              }}
+            >
+              <div
+                style={{
+                  width: 20,
+                  height: 20,
+                  border: `2px solid ${T.border}`,
+                  borderTopColor: T.amber,
+                  borderRadius: "50%",
+                  animation: "spin 0.8s linear infinite",
+                }}
+              />
+              <span style={{ fontSize: 12, color: T.inkFaint }}>
+                Loading document…
+              </span>
+            </div>
+          )}
+          {pdfBlobUrl && pageWidth > 0 && (
+            <Document
+              file={pdfBlobUrl}
+              onLoadSuccess={({ numPages }) => setNumPages(numPages)}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 12,
+                }}
+              >
+                {Array.from({ length: numPages || 0 }, (_, i) => i + 1).map(
+                  (pageNum) => {
+                    const dims = pageDimensions[pageNum];
+                    const isTargetPage =
+                      selectedResult?.page_number === pageNum &&
+                      selectedResult?.pdf_id === loadedPdfId;
+                    const boxesToShow = isTargetPage ? activeBoxes : [];
+                    return (
+                      <div
+                        key={pageNum}
+                        ref={(el) => (pageRefs.current[pageNum] = el)}
+                        style={{
+                          position: "relative",
+                          borderRadius: 6,
+                          overflow: "hidden",
+                          boxShadow: isTargetPage
+                            ? `0 0 0 2px ${T.amber}, 0 4px 20px rgba(26,23,20,0.12)`
+                            : "0 2px 12px rgba(26,23,20,0.08)",
+                          transition: "box-shadow 0.25s",
+                        }}
+                      >
+                        <Page
+                          pageNumber={pageNum}
+                          width={pageWidth}
+                          renderTextLayer={true}
+                          renderAnnotationLayer={true}
+                          onLoadSuccess={(page) =>
+                            handlePageLoadSuccess(pageNum, page)
+                          }
+                        />
+                        {dims &&
+                          boxesToShow.map((box, idx) => {
+                            const scale = pageWidth / dims.width;
+                            return (
+                              <div
+                                key={idx}
+                                className="highlight-box"
+                                style={{
+                                  left: box.x0 * scale,
+                                  top: box.y0 * scale,
+                                  width: (box.x1 - box.x0) * scale,
+                                  height: (box.y1 - box.y0) * scale,
+                                }}
+                              />
+                            );
+                          })}
+                      </div>
+                    );
+                  },
+                )}
+              </div>
+            </Document>
+          )}
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <style>{GLOBAL_CSS}</style>
       <div
         style={{
-          height: "100vh",
+          height: "100dvh",
           overflow: "hidden",
           background: T.cream,
           display: "flex",
@@ -485,8 +713,8 @@ export default function MainApp({ user, onSignOut }) {
             background: T.white,
             display: "flex",
             alignItems: "center",
-            padding: "0 20px",
-            gap: 16,
+            padding: "0 16px",
+            gap: 10,
             position: "relative",
             zIndex: 10,
           }}
@@ -503,7 +731,7 @@ export default function MainApp({ user, onSignOut }) {
               flexShrink: 0,
             }}
           >
-            Study PDF Search
+            {isMobile ? "Recall" : "Study PDF Search"}
           </span>
 
           {uploadStatus ? (
@@ -512,7 +740,8 @@ export default function MainApp({ user, onSignOut }) {
                 flex: 1,
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
+                gap: 8,
+                minWidth: 0,
               }}
             >
               <div className="progress-track">
@@ -530,8 +759,7 @@ export default function MainApp({ user, onSignOut }) {
                   fontFamily: "'JetBrains Mono', monospace",
                 }}
               >
-                {uploadStatus.current}/{uploadStatus.total} ·{" "}
-                {uploadStatus.filename}
+                {uploadStatus.current}/{uploadStatus.total}
               </span>
             </div>
           ) : (
@@ -539,19 +767,21 @@ export default function MainApp({ user, onSignOut }) {
           )}
 
           <div
+            className="header-actions"
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 8,
+              gap: 6,
               flexShrink: 0,
             }}
           >
             {user && (
               <span
+                className="header-email desktop-only"
                 style={{
                   fontSize: 12,
                   color: T.inkFaint,
-                  maxWidth: 180,
+                  maxWidth: 160,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
@@ -568,12 +798,14 @@ export default function MainApp({ user, onSignOut }) {
                 display: "flex",
                 alignItems: "center",
                 gap: 5,
-                padding: "5px 11px",
+                padding: "5px 10px",
               }}
             >
-              <Library size={12} /> My PDFs
+              <Library size={12} />
+              <span className="desktop-only" style={{ display: "inline" }}>My PDFs</span>
             </button>
 
+            {/* Upload PDF button */}
             <button
               onClick={() => fileInputRef.current.click()}
               disabled={!!uploadStatus}
@@ -582,12 +814,14 @@ export default function MainApp({ user, onSignOut }) {
                 display: "flex",
                 alignItems: "center",
                 gap: 5,
-                padding: "5px 11px",
+                padding: "5px 10px",
               }}
             >
-              <FileText size={12} /> PDF
+              <FileText size={12} />
+              <span>PDF</span>
             </button>
 
+            {/* Upload Folder button */}
             <button
               onClick={() => folderInputRef.current.click()}
               disabled={!!uploadStatus}
@@ -596,10 +830,11 @@ export default function MainApp({ user, onSignOut }) {
                 display: "flex",
                 alignItems: "center",
                 gap: 5,
-                padding: "6px 12px",
+                padding: "6px 10px",
               }}
             >
-              <Search size={12} /> Folder
+              <FolderOpen size={12} />
+              <span className="desktop-only" style={{ display: "inline" }}>Folder</span>
             </button>
 
             {user && (
@@ -613,7 +848,8 @@ export default function MainApp({ user, onSignOut }) {
                   padding: "5px 10px",
                 }}
               >
-                <LogOut size={12} /> Sign out
+                <LogOut size={12} />
+                <span className="desktop-only" style={{ display: "inline" }}>Sign out</span>
               </button>
             )}
 
@@ -647,14 +883,15 @@ export default function MainApp({ user, onSignOut }) {
             position: "relative",
           }}
         >
-          {/* ── LEFT SIDEBAR ── */}
+          {/* ── LEFT SIDEBAR (results panel) ── */}
+          {/* On mobile: full-width, hidden when viewer is open */}
           <aside
             style={{
-              width: 320,
+              width: isMobile ? "100%" : 320,
               flexShrink: 0,
-              borderRight: `1px solid ${T.border}`,
+              borderRight: isMobile ? "none" : `1px solid ${T.border}`,
               background: T.sidebarBg,
-              display: "flex",
+              display: isMobile && mobileView === "viewer" ? "none" : "flex",
               flexDirection: "column",
             }}
           >
@@ -845,190 +1082,34 @@ export default function MainApp({ user, onSignOut }) {
             </div>
           </aside>
 
-          {/* ── RIGHT PANEL ── */}
-          <div
-            style={{
-              flex: 1,
-              minWidth: 0,
-              display: "flex",
-              flexDirection: "column",
-              overflow: "hidden",
-            }}
-          >
+          {/* ── RIGHT PANEL (PDF viewer) ── */}
+          {/* Desktop: always visible beside sidebar */}
+          {/* Mobile: full-screen sheet when mobileView === "viewer" */}
+          {(!isMobile || mobileView === "viewer") && (
             <div
-              style={{
-                height: 46,
-                flexShrink: 0,
-                borderBottom: `1px solid ${T.border}`,
-                background: T.white,
-                display: "flex",
-                alignItems: "center",
-                padding: "0 16px",
-                gap: 8,
-              }}
-            >
-              {selectedResult ? (
-                <>
-                  <FileText size={12} color={T.amber} />
-                  <span
-                    style={{
-                      fontSize: 12,
-                      color: T.inkMid,
-                      fontWeight: 500,
-                      flex: 1,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {selectedResult.original_filename}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: 10,
-                      color: T.inkFaint,
-                      padding: "2px 7px",
-                      borderRadius: 99,
-                      background: T.sidebarBg,
-                      border: `1px solid ${T.border}`,
-                      fontFamily: "'JetBrains Mono', monospace",
-                      flexShrink: 0,
-                    }}
-                  >
-                    p. {selectedResult.page_number}
-                  </span>
-                </>
-              ) : (
-                <span style={{ fontSize: 12, color: T.inkFaint }}>
-                  Select a result to view the document
-                </span>
-              )}
-            </div>
-
-            <div
-              ref={(node) => {
-                viewerRef.current = node;
-                viewerWidthRef(node);
-              }}
-              style={{
-                flex: 1,
-                minHeight: 0,
-                minWidth: 0,
-                overflowY: "auto",
-                overflowX: "auto",
-                background: T.cream,
-                padding: "24px 24px 48px",
-              }}
-            >
-              {!selectedResult && (
-                <div
-                  style={{
-                    minHeight: "100%",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <EmptyState
-                    icon={FileText}
-                    title="Open a document"
-                    subtitle="Click any search result on the left to load the document and jump to the matching passage."
-                  />
-                </div>
-              )}
-              {selectedResult && !pdfBlobUrl && (
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    marginTop: 80,
-                    justifyContent: "center",
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 20,
-                      height: 20,
-                      border: `2px solid ${T.border}`,
-                      borderTopColor: T.amber,
-                      borderRadius: "50%",
-                      animation: "spin 0.8s linear infinite",
-                    }}
-                  />
-                  <span style={{ fontSize: 12, color: T.inkFaint }}>
-                    Loading document…
-                  </span>
-                </div>
-              )}
-              {pdfBlobUrl && pageWidth > 0 && (
-                <Document
-                  file={pdfBlobUrl}
-                  onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-                >
-                  <div
-                    style={{
+              className={isMobile ? "mobile-viewer-sheet slide-up" : ""}
+              style={
+                isMobile
+                  ? {
+                      position: "fixed",
+                      inset: 0,
+                      zIndex: 50,
+                      background: T.cream,
                       display: "flex",
                       flexDirection: "column",
-                      alignItems: "center",
-                      gap: 12,
-                    }}
-                  >
-                    {Array.from({ length: numPages || 0 }, (_, i) => i + 1).map(
-                      (pageNum) => {
-                        const dims = pageDimensions[pageNum];
-                        const isTargetPage =
-                          selectedResult?.page_number === pageNum &&
-                          selectedResult?.pdf_id === loadedPdfId;
-                        const boxesToShow = isTargetPage ? activeBoxes : [];
-                        return (
-                          <div
-                            key={pageNum}
-                            ref={(el) => (pageRefs.current[pageNum] = el)}
-                            style={{
-                              position: "relative",
-                              borderRadius: 6,
-                              overflow: "hidden",
-                              boxShadow: isTargetPage
-                                ? `0 0 0 2px ${T.amber}, 0 4px 20px rgba(26,23,20,0.12)`
-                                : "0 2px 12px rgba(26,23,20,0.08)",
-                              transition: "box-shadow 0.25s",
-                            }}
-                          >
-                            <Page
-                              pageNumber={pageNum}
-                              width={pageWidth}
-                              renderTextLayer={true}
-                              renderAnnotationLayer={true}
-                              onLoadSuccess={(page) =>
-                                handlePageLoadSuccess(pageNum, page)
-                              }
-                            />
-                            {dims &&
-                              boxesToShow.map((box, idx) => {
-                                const scale = pageWidth / dims.width;
-                                return (
-                                  <div
-                                    key={idx}
-                                    className="highlight-box"
-                                    style={{
-                                      left: box.x0 * scale,
-                                      top: box.y0 * scale,
-                                      width: (box.x1 - box.x0) * scale,
-                                      height: (box.y1 - box.y0) * scale,
-                                    }}
-                                  />
-                                );
-                              })}
-                          </div>
-                        );
-                      },
-                    )}
-                  </div>
-                </Document>
-              )}
+                    }
+                  : {
+                      flex: 1,
+                      minWidth: 0,
+                      display: "flex",
+                      flexDirection: "column",
+                      overflow: "hidden",
+                    }
+              }
+            >
+              <PDFViewerContent />
             </div>
-          </div>
+          )}
 
           {/* ── MY PDFs SLIDE-IN PANEL ── */}
           {libraryOpen && (
@@ -1055,9 +1136,9 @@ export default function MainApp({ user, onSignOut }) {
               <div
                 style={{
                   position: "relative",
-                  width: 380,
+                  width: isMobile ? "100%" : 380,
                   background: T.white,
-                  borderRight: `1px solid ${T.border}`,
+                  borderRight: isMobile ? "none" : `1px solid ${T.border}`,
                   display: "flex",
                   flexDirection: "column",
                   boxShadow: "4px 0 32px rgba(26,23,20,0.12)",
@@ -1251,7 +1332,7 @@ export default function MainApp({ user, onSignOut }) {
                       padding: "7px 0",
                     }}
                   >
-                    <Search size={12} /> Add Folder
+                    <FolderOpen size={12} /> Add Folder
                   </button>
                 </div>
               </div>

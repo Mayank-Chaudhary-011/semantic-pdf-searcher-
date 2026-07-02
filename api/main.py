@@ -134,7 +134,7 @@ async def ingest(
 # ============================================================
 class SearchRequest(BaseModel):
     query: str
-    top_k: int = 5
+    top_k: int = 8
 
 
 @app.post("/search")

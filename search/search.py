@@ -9,7 +9,8 @@ from Database.db import get_connection
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vectorstore"))
 from turbovec_store import load_or_create_index, search_chunks
 
-RELEVANCE_THRESHOLD = 0.45
+RELEVANCE_THRESHOLD = 0.30   # was 0.45 — lowered so similar-context PDFs surface
+
 
 
 def search_pdf(query, top_k=5, user_id=None, exclude_references=True, pdf_id=None, embedder=None):
@@ -41,7 +42,11 @@ def search_pdf(query, top_k=5, user_id=None, exclude_references=True, pdf_id=Non
             conn.close()
             return []
 
-    scores, chunk_ids = search_chunks(index, query_vector, k=top_k, allowed_ids=allowed_ids)
+    # Fetch more candidates than requested from the index — after the
+    # RELEVANCE_THRESHOLD filter we may lose some, so over-fetching ensures
+    # we always return top_k meaningful results across all user PDFs.
+    fetch_k = max(top_k * 3, top_k + 10)
+    scores, chunk_ids = search_chunks(index, query_vector, k=fetch_k, allowed_ids=allowed_ids)
 
     if len(chunk_ids) == 0:
         cursor.close()
@@ -82,7 +87,7 @@ def search_pdf(query, top_k=5, user_id=None, exclude_references=True, pdf_id=Non
         })
 
     results.sort(key=lambda r: r["score"], reverse=True)
-    return results
+    return results[:top_k]
 
 
 if __name__ == "__main__":
