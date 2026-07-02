@@ -16,10 +16,7 @@ import {
   ChevronLeft,
 } from "lucide-react";
 
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url,
-).toString();
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 const MAX_PAGE_WIDTH = 820;
