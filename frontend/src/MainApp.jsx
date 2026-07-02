@@ -224,24 +224,47 @@ function ScorePill({ score }) {
   );
 }
 
-// ── PDF Viewer panel — defined OUTSIDE MainApp to avoid React error #185 ──────
+// ── PDFViewerContent owns its own numPages + pageDimensions state ─────────────
 function PDFViewerContent({
   isMobile,
   setMobileView,
   selectedResult,
   pdfBlobUrl,
-  pageWidth,
-  numPages,
-  pageDimensions,
   loadedPdfId,
   activeBoxes,
   viewerRef,
   viewerWidthRef,
   pageRefs,
-  handlePageLoadSuccess,
+  onPagesReady, // callback: (numPages, pageDimensions) → parent uses for scroll
 }) {
+  const [numPages, setNumPages] = useState(null);
+  const [pageDimensions, setPageDimensions] = useState({});
+  const [pageWidth, pageWidthRef] = useViewerWidth();
+
+  // Reset when PDF changes
+  useEffect(() => {
+    setNumPages(null);
+    setPageDimensions({});
+  }, [pdfBlobUrl]);
+
+  // Notify parent once pages are loaded so it can trigger scroll
+  useEffect(() => {
+    if (numPages) onPagesReady(numPages, pageDimensions);
+  }, [numPages, pageDimensions]);
+
+  function handlePageLoadSuccess(pageNum, page) {
+    setPageDimensions((prev) => {
+      const next = {
+        ...prev,
+        [pageNum]: { width: page.originalWidth, height: page.originalHeight },
+      };
+      return next;
+    });
+  }
+
   return (
     <>
+      {/* Toolbar */}
       <div
         style={{
           height: 46,
@@ -307,10 +330,12 @@ function PDFViewerContent({
         )}
       </div>
 
+      {/* PDF canvas */}
       <div
         ref={(node) => {
           viewerRef.current = node;
           viewerWidthRef(node);
+          pageWidthRef(node);
         }}
         style={{
           flex: 1,
@@ -366,7 +391,7 @@ function PDFViewerContent({
         {pdfBlobUrl && pageWidth > 0 && (
           <Document
             file={pdfBlobUrl}
-            onLoadSuccess={({ numPages }) => setNumPages(numPages)}
+            onLoadSuccess={({ numPages: n }) => setNumPages(n)}
           >
             <div
               style={{
@@ -441,8 +466,6 @@ export default function MainApp({ user, onSignOut }) {
   const [searched, setSearched] = useState(false);
   const [selectedResult, setSelectedResult] = useState(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState(null);
-  const [numPages, setNumPages] = useState(null);
-  const [pageDimensions, setPageDimensions] = useState({});
   const [loadedPdfId, setLoadedPdfId] = useState(null);
   const [uploadStatus, setUploadStatus] = useState(null);
   const [appError, setAppError] = useState(null);
@@ -452,6 +475,11 @@ export default function MainApp({ user, onSignOut }) {
   const [deletingId, setDeletingId] = useState(null);
   const [mobileView, setMobileView] = useState("results");
 
+  // For scroll — updated via onPagesReady callback from PDFViewerContent
+  const numPagesRef = useRef(null);
+  const pageDimensionsRef = useRef({});
+  const scrollPendingRef = useRef(false);
+
   const windowWidth = useWindowWidth();
   const isMobile = windowWidth < 768;
 
@@ -460,8 +488,8 @@ export default function MainApp({ user, onSignOut }) {
   const pageRefs = useRef({});
   const viewerRef = useRef(null);
   const isScrolling = useRef(false);
+  const [, viewerWidthRef] = useViewerWidth();
 
-  const [pageWidth, viewerWidthRef] = useViewerWidth();
   const activeBoxes = React.useMemo(
     () => selectedResult?.bounding_boxes || [],
     [selectedResult],
@@ -473,39 +501,56 @@ export default function MainApp({ user, onSignOut }) {
     };
   }, [pdfBlobUrl]);
 
-  useEffect(() => {
-    if (!selectedResult || !numPages) return;
+  function tryScroll() {
+    if (!selectedResult || !numPagesRef.current) return;
     if (isScrolling.current) return;
+
     const targetPage = selectedResult.page_number;
+    const pageEl = pageRefs.current[targetPage];
+    const viewer = viewerRef.current;
+    if (!pageEl || !viewer) return;
+
+    isScrolling.current = true;
+    const box = activeBoxes[0];
+    const dims = pageDimensionsRef.current[targetPage];
+    const viewerRect = viewer.getBoundingClientRect();
+    const pageRect = pageEl.getBoundingClientRect();
+    const relativeTop = pageRect.top - viewerRect.top + viewer.scrollTop;
+
+    if (box && dims) {
+      const pageWidth = Math.min(
+        MAX_PAGE_WIDTH,
+        Math.max(320, viewer.clientWidth - PAGE_PADDING),
+      );
+      const scale = pageWidth / dims.width;
+      viewer.scrollTo({
+        top: relativeTop + box.y0 * scale - 80,
+        behavior: "smooth",
+      });
+    } else {
+      viewer.scrollTo({ top: relativeTop - 24, behavior: "smooth" });
+    }
 
     setTimeout(() => {
-      const pageEl = pageRefs.current[targetPage];
-      const viewer = viewerRef.current;
-      if (!pageEl || !viewer) return;
+      isScrolling.current = false;
+    }, 800);
+  }
 
-      isScrolling.current = true;
-      const pw = pageWidth || MAX_PAGE_WIDTH;
-      const box = activeBoxes[0];
-      const dims = pageDimensions[targetPage];
-      const viewerRect = viewer.getBoundingClientRect();
-      const pageRect = pageEl.getBoundingClientRect();
-      const relativeTop = pageRect.top - viewerRect.top + viewer.scrollTop;
+  // Called by PDFViewerContent when pages finish loading
+  const handlePagesReady = useCallback(
+    (numPages, pageDimensions) => {
+      numPagesRef.current = numPages;
+      pageDimensionsRef.current = pageDimensions;
+      // Attempt scroll after pages are ready
+      setTimeout(() => tryScroll(), 300);
+    },
+    [selectedResult, activeBoxes],
+  );
 
-      if (box && dims) {
-        const scale = pw / dims.width;
-        viewer.scrollTo({
-          top: relativeTop + box.y0 * scale - 80,
-          behavior: "smooth",
-        });
-      } else {
-        viewer.scrollTo({ top: relativeTop - 24, behavior: "smooth" });
-      }
-
-      setTimeout(() => {
-        isScrolling.current = false;
-      }, 800);
-    }, 300);
-  }, [selectedResult, numPages, pageWidth, activeBoxes, pageDimensions]);
+  // Trigger scroll when result changes (PDF might already be loaded)
+  useEffect(() => {
+    setTimeout(() => tryScroll(), 400);
+  }, [selectedResult]);
 
   async function fetchMyPdfs() {
     setPdfsLoading(true);
@@ -534,7 +579,6 @@ export default function MainApp({ user, onSignOut }) {
       if (selectedResult?.pdf_id === pdfId) {
         setSelectedResult(null);
         setPdfBlobUrl(null);
-        setNumPages(null);
         setLoadedPdfId(null);
       }
       setResults((prev) => prev.filter((r) => r.pdf_id !== pdfId));
@@ -584,10 +628,10 @@ export default function MainApp({ user, onSignOut }) {
 
     if (!isSamePdf) {
       setPdfBlobUrl(null);
-      setNumPages(null);
-      pageRefs.current = {};
-      setPageDimensions({});
       setLoadedPdfId(null);
+      pageRefs.current = {};
+      numPagesRef.current = null;
+      pageDimensionsRef.current = {};
       try {
         const res = await fetch(`${API}/pdf/${result.pdf_id}`, {
           headers: await authHeaders(),
@@ -600,15 +644,7 @@ export default function MainApp({ user, onSignOut }) {
         setAppError("Could not load PDF — check your connection.");
       }
     } else {
-      setTimeout(() => {
-        const pageEl = pageRefs.current[result.page_number];
-        const viewer = viewerRef.current;
-        if (!pageEl || !viewer) return;
-        const viewerRect = viewer.getBoundingClientRect();
-        const pageRect = pageEl.getBoundingClientRect();
-        const relativeTop = pageRect.top - viewerRect.top + viewer.scrollTop;
-        viewer.scrollTo({ top: relativeTop - 24, behavior: "smooth" });
-      }, 100);
+      setTimeout(() => tryScroll(), 100);
     }
   }
 
@@ -647,23 +683,16 @@ export default function MainApp({ user, onSignOut }) {
       }
       fetchMyPdfs();
     } catch (err) {
-      if (err.message === "NOT_LOGGED_IN") {
-        setAppError("Session expired — please sign out and sign in again.");
-      } else {
-        setAppError(`Upload failed: ${err.message}`);
-      }
+      setAppError(
+        err.message === "NOT_LOGGED_IN"
+          ? "Session expired — please sign out and sign in again."
+          : `Upload failed: ${err.message}`,
+      );
     } finally {
       setUploadStatus(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       if (folderInputRef.current) folderInputRef.current.value = "";
     }
-  }
-
-  function handlePageLoadSuccess(pageNum, page) {
-    setPageDimensions((prev) => ({
-      ...prev,
-      [pageNum]: { width: page.originalWidth, height: page.originalHeight },
-    }));
   }
 
   const uploadPct = uploadStatus
@@ -770,7 +799,6 @@ export default function MainApp({ user, onSignOut }) {
                 {user?.email ?? ""}
               </span>
             )}
-
             <button
               onClick={openLibrary}
               className="btn-ghost"
@@ -784,7 +812,6 @@ export default function MainApp({ user, onSignOut }) {
               <Library size={12} />
               <span className="desktop-only">My PDFs</span>
             </button>
-
             <button
               onClick={() => fileInputRef.current.click()}
               disabled={!!uploadStatus}
@@ -799,7 +826,6 @@ export default function MainApp({ user, onSignOut }) {
               <FileText size={12} />
               <span>PDF</span>
             </button>
-
             <button
               onClick={() => folderInputRef.current.click()}
               disabled={!!uploadStatus}
@@ -814,7 +840,6 @@ export default function MainApp({ user, onSignOut }) {
               <FolderOpen size={12} />
               <span className="desktop-only">Folder</span>
             </button>
-
             {user && (
               <button
                 onClick={onSignOut}
@@ -830,7 +855,6 @@ export default function MainApp({ user, onSignOut }) {
                 <span className="desktop-only">Sign out</span>
               </button>
             )}
-
             <input
               ref={fileInputRef}
               type="file"
@@ -888,7 +912,6 @@ export default function MainApp({ user, onSignOut }) {
                 {appError}
               </div>
             )}
-
             <div style={{ padding: "14px 12px 0", flexShrink: 0 }}>
               <div
                 className="search-container"
@@ -933,7 +956,6 @@ export default function MainApp({ user, onSignOut }) {
                   {loading ? "…" : "Search"}
                 </button>
               </div>
-
               {!loading && results.length > 0 && (
                 <div
                   style={{
@@ -950,7 +972,6 @@ export default function MainApp({ user, onSignOut }) {
                 </div>
               )}
             </div>
-
             <div
               style={{
                 flex: 1,
@@ -1059,7 +1080,7 @@ export default function MainApp({ user, onSignOut }) {
             </div>
           </aside>
 
-          {/* ── RIGHT PANEL (PDF viewer) ── */}
+          {/* ── RIGHT PANEL ── */}
           {(!isMobile || mobileView === "viewer") && (
             <div
               className={isMobile ? "slide-up" : ""}
@@ -1087,21 +1108,17 @@ export default function MainApp({ user, onSignOut }) {
                 setMobileView={setMobileView}
                 selectedResult={selectedResult}
                 pdfBlobUrl={pdfBlobUrl}
-                pageWidth={pageWidth}
-                numPages={numPages}
-                setNumPages={setNumPages}
-                pageDimensions={pageDimensions}
                 loadedPdfId={loadedPdfId}
                 activeBoxes={activeBoxes}
                 viewerRef={viewerRef}
                 viewerWidthRef={viewerWidthRef}
                 pageRefs={pageRefs}
-                handlePageLoadSuccess={handlePageLoadSuccess}
+                onPagesReady={handlePagesReady}
               />
             </div>
           )}
 
-          {/* ── MY PDFs SLIDE-IN PANEL ── */}
+          {/* ── MY PDFs PANEL ── */}
           {libraryOpen && (
             <div
               style={{
@@ -1177,7 +1194,6 @@ export default function MainApp({ user, onSignOut }) {
                     <X size={16} />
                   </button>
                 </div>
-
                 <div
                   style={{
                     flex: 1,
@@ -1264,7 +1280,6 @@ export default function MainApp({ user, onSignOut }) {
                       </div>
                     ))}
                 </div>
-
                 <div
                   style={{
                     padding: "12px 14px",
