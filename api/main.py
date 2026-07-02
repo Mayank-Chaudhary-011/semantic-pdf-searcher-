@@ -276,8 +276,16 @@ async def list_pdfs(user_id: str = Depends(get_current_user_id)):
     cur.close()
     conn.close()
     return {
+
         "pdfs": [
-            {"id": str(r[0]), "filename": r[1], "total_pages": r[2], "upload_date": str(r[3])}
+
+            {
+                "id": str(r[0]),
+                "filename": r[1],
+                "total_pages": r[2],
+                "upload_date": r[3].strftime("%Y-%m-%d") if r[3] else ""
+            }
+
             for r in rows
         ]
     }

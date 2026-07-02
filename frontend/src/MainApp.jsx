@@ -14,7 +14,6 @@ import {
   Library,
   FolderOpen,
   ChevronLeft,
-  Menu,
 } from "lucide-react";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -22,28 +21,19 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url,
 ).toString();
 
-// API base URL — set VITE_API_URL in your Vercel project env vars to your
-// deployed Railway backend URL (e.g. https://your-app.up.railway.app).
-// Falls back to localhost for local dev.
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 const MAX_PAGE_WIDTH = 820;
 const PAGE_PADDING = 48;
 
-// Every backend route now requires a valid Supabase session token.
 async function authHeaders() {
-  let { data: { session } } = await supabase.auth.getSession();
-
+  let {
+    data: { session },
+  } = await supabase.auth.getSession();
   if (!session?.access_token) {
     const { data: refreshed } = await supabase.auth.refreshSession();
     session = refreshed?.session ?? null;
   }
-
-  console.log("[authHeaders] session:", session ? `found, token starts with ${session.access_token.slice(0, 20)}...` : "NULL — not logged in");
-
-  if (!session?.access_token) {
-    throw new Error("NOT_LOGGED_IN");
-  }
-
+  if (!session?.access_token) throw new Error("NOT_LOGGED_IN");
   return { Authorization: `Bearer ${session.access_token}` };
 }
 
@@ -97,31 +87,19 @@ const GLOBAL_CSS = `
   @keyframes slideIn { from { transform: translateX(-100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
   @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
   .slide-up { animation: slideUp 0.28s cubic-bezier(0.22,1,0.36,1) forwards; }
-
-  /* ── Mobile responsive ── */
   @media (max-width: 767px) {
     .desktop-only { display: none !important; }
-    .mobile-sidebar { width: 100% !important; }
-    .mobile-viewer-sheet {
-      position: fixed !important;
-      inset: 0 !important;
-      z-index: 50 !important;
-      background: ${T.cream};
-      display: flex;
-      flex-direction: column;
-    }
     .header-email { display: none !important; }
     .header-actions { gap: 5px !important; }
-    .header-actions .btn-ghost,
-    .header-actions .btn-primary { padding: 5px 8px !important; font-size: 11px !important; }
+    .header-actions .btn-ghost, .header-actions .btn-primary { padding: 5px 8px !important; font-size: 11px !important; }
   }
-  @media (min-width: 768px) {
-    .mobile-only { display: none !important; }
-  }
+  @media (min-width: 768px) { .mobile-only { display: none !important; } }
 `;
 
 function useWindowWidth() {
-  const [width, setWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
+  const [width, setWidth] = useState(
+    typeof window !== "undefined" ? window.innerWidth : 1200,
+  );
   useEffect(() => {
     const handler = () => setWidth(window.innerWidth);
     window.addEventListener("resize", handler);
@@ -249,6 +227,216 @@ function ScorePill({ score }) {
   );
 }
 
+// ── PDF Viewer panel — defined OUTSIDE MainApp to avoid React error #185 ──────
+function PDFViewerContent({
+  isMobile,
+  setMobileView,
+  selectedResult,
+  pdfBlobUrl,
+  pageWidth,
+  numPages,
+  pageDimensions,
+  loadedPdfId,
+  activeBoxes,
+  viewerRef,
+  viewerWidthRef,
+  pageRefs,
+  handlePageLoadSuccess,
+}) {
+  return (
+    <>
+      <div
+        style={{
+          height: 46,
+          flexShrink: 0,
+          borderBottom: `1px solid ${T.border}`,
+          background: T.white,
+          display: "flex",
+          alignItems: "center",
+          padding: "0 16px",
+          gap: 8,
+        }}
+      >
+        {isMobile && (
+          <button
+            onClick={() => setMobileView("results")}
+            className="btn-ghost mobile-only"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "4px 8px",
+              marginRight: 4,
+            }}
+          >
+            <ChevronLeft size={14} /> Results
+          </button>
+        )}
+        {selectedResult ? (
+          <>
+            <FileText size={12} color={T.amber} />
+            <span
+              style={{
+                fontSize: 12,
+                color: T.inkMid,
+                fontWeight: 500,
+                flex: 1,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {selectedResult.original_filename}
+            </span>
+            <span
+              style={{
+                fontSize: 10,
+                color: T.inkFaint,
+                padding: "2px 7px",
+                borderRadius: 99,
+                background: T.sidebarBg,
+                border: `1px solid ${T.border}`,
+                fontFamily: "'JetBrains Mono', monospace",
+                flexShrink: 0,
+              }}
+            >
+              p. {selectedResult.page_number}
+            </span>
+          </>
+        ) : (
+          <span style={{ fontSize: 12, color: T.inkFaint }}>
+            Select a result to view the document
+          </span>
+        )}
+      </div>
+
+      <div
+        ref={(node) => {
+          viewerRef.current = node;
+          viewerWidthRef(node);
+        }}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+          overflowY: "auto",
+          overflowX: "auto",
+          background: T.cream,
+          padding: "24px 24px 48px",
+        }}
+      >
+        {!selectedResult && (
+          <div
+            style={{
+              minHeight: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <EmptyState
+              icon={FileText}
+              title="Open a document"
+              subtitle="Click any search result on the left to load the document and jump to the matching passage."
+            />
+          </div>
+        )}
+        {selectedResult && !pdfBlobUrl && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              marginTop: 80,
+              justifyContent: "center",
+            }}
+          >
+            <div
+              style={{
+                width: 20,
+                height: 20,
+                border: `2px solid ${T.border}`,
+                borderTopColor: T.amber,
+                borderRadius: "50%",
+                animation: "spin 0.8s linear infinite",
+              }}
+            />
+            <span style={{ fontSize: 12, color: T.inkFaint }}>
+              Loading document…
+            </span>
+          </div>
+        )}
+        {pdfBlobUrl && pageWidth > 0 && (
+          <Document
+            file={pdfBlobUrl}
+            onLoadSuccess={({ numPages: n }) => numPages !== n && null}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              {Array.from({ length: numPages || 0 }, (_, i) => i + 1).map(
+                (pageNum) => {
+                  const dims = pageDimensions[pageNum];
+                  const isTargetPage =
+                    selectedResult?.page_number === pageNum &&
+                    selectedResult?.pdf_id === loadedPdfId;
+                  const boxesToShow = isTargetPage ? activeBoxes : [];
+                  return (
+                    <div
+                      key={pageNum}
+                      ref={(el) => (pageRefs.current[pageNum] = el)}
+                      style={{
+                        position: "relative",
+                        borderRadius: 6,
+                        overflow: "hidden",
+                        boxShadow: isTargetPage
+                          ? `0 0 0 2px ${T.amber}, 0 4px 20px rgba(26,23,20,0.12)`
+                          : "0 2px 12px rgba(26,23,20,0.08)",
+                        transition: "box-shadow 0.25s",
+                      }}
+                    >
+                      <Page
+                        pageNumber={pageNum}
+                        width={pageWidth}
+                        renderTextLayer={true}
+                        renderAnnotationLayer={true}
+                        onLoadSuccess={(page) =>
+                          handlePageLoadSuccess(pageNum, page)
+                        }
+                      />
+                      {dims &&
+                        boxesToShow.map((box, idx) => {
+                          const scale = pageWidth / dims.width;
+                          return (
+                            <div
+                              key={idx}
+                              className="highlight-box"
+                              style={{
+                                left: box.x0 * scale,
+                                top: box.y0 * scale,
+                                width: (box.x1 - box.x0) * scale,
+                                height: (box.y1 - box.y0) * scale,
+                              }}
+                            />
+                          );
+                        })}
+                    </div>
+                  );
+                },
+              )}
+            </div>
+          </Document>
+        )}
+      </div>
+    </>
+  );
+}
+
 export default function MainApp({ user, onSignOut }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
@@ -265,7 +453,6 @@ export default function MainApp({ user, onSignOut }) {
   const [myPdfs, setMyPdfs] = useState([]);
   const [pdfsLoading, setPdfsLoading] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
-  // Mobile: "results" | "viewer"
   const [mobileView, setMobileView] = useState("results");
 
   const windowWidth = useWindowWidth();
@@ -280,7 +467,7 @@ export default function MainApp({ user, onSignOut }) {
   const [pageWidth, viewerWidthRef] = useViewerWidth();
   const activeBoxes = React.useMemo(
     () => selectedResult?.bounding_boxes || [],
-    [selectedResult]
+    [selectedResult],
   );
 
   useEffect(() => {
@@ -321,20 +508,12 @@ export default function MainApp({ user, onSignOut }) {
         isScrolling.current = false;
       }, 800);
     }, 300);
-  }, [
-    selectedResult,
-    numPages,
-    pageWidth,
-    activeBoxes,
-    pageDimensions,
-  ]);
+  }, [selectedResult, numPages, pageWidth, activeBoxes, pageDimensions]);
 
   async function fetchMyPdfs() {
     setPdfsLoading(true);
     try {
-      const res = await fetch(`${API}/pdfs`, {
-        headers: await authHeaders(),
-      });
+      const res = await fetch(`${API}/pdfs`, { headers: await authHeaders() });
       if (!res.ok) throw new Error();
       const data = await res.json();
       setMyPdfs(data.pdfs || []);
@@ -404,8 +583,6 @@ export default function MainApp({ user, onSignOut }) {
     setSelectedResult(result);
     isScrolling.current = false;
     setAppError(null);
-
-    // On mobile: switch to viewer panel
     if (isMobile) setMobileView("viewer");
 
     if (!isSamePdf) {
@@ -468,7 +645,6 @@ export default function MainApp({ user, onSignOut }) {
         });
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          console.error("[upload] backend error:", res.status, body);
           throw new Error(body.detail ?? "Upload failed");
         }
       }
@@ -496,199 +672,6 @@ export default function MainApp({ user, onSignOut }) {
   const uploadPct = uploadStatus
     ? Math.round((uploadStatus.current / uploadStatus.total) * 100)
     : 0;
-
-  // ── PDF Viewer panel (reused on both desktop & mobile sheet) ─────────────
-  function PDFViewerContent() {
-    return (
-      <>
-        {/* Viewer sub-header */}
-        <div
-          style={{
-            height: 46,
-            flexShrink: 0,
-            borderBottom: `1px solid ${T.border}`,
-            background: T.white,
-            display: "flex",
-            alignItems: "center",
-            padding: "0 16px",
-            gap: 8,
-          }}
-        >
-          {/* Mobile back button */}
-          {isMobile && (
-            <button
-              onClick={() => setMobileView("results")}
-              className="btn-ghost mobile-only"
-              style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", marginRight: 4 }}
-            >
-              <ChevronLeft size={14} /> Results
-            </button>
-          )}
-          {selectedResult ? (
-            <>
-              <FileText size={12} color={T.amber} />
-              <span
-                style={{
-                  fontSize: 12,
-                  color: T.inkMid,
-                  fontWeight: 500,
-                  flex: 1,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {selectedResult.original_filename}
-              </span>
-              <span
-                style={{
-                  fontSize: 10,
-                  color: T.inkFaint,
-                  padding: "2px 7px",
-                  borderRadius: 99,
-                  background: T.sidebarBg,
-                  border: `1px solid ${T.border}`,
-                  fontFamily: "'JetBrains Mono', monospace",
-                  flexShrink: 0,
-                }}
-              >
-                p. {selectedResult.page_number}
-              </span>
-            </>
-          ) : (
-            <span style={{ fontSize: 12, color: T.inkFaint }}>
-              Select a result to view the document
-            </span>
-          )}
-        </div>
-
-        {/* PDF canvas area */}
-        <div
-          ref={(node) => {
-            viewerRef.current = node;
-            viewerWidthRef(node);
-          }}
-          style={{
-            flex: 1,
-            minHeight: 0,
-            minWidth: 0,
-            overflowY: "auto",
-            overflowX: "auto",
-            background: T.cream,
-            padding: "24px 24px 48px",
-          }}
-        >
-          {!selectedResult && (
-            <div
-              style={{
-                minHeight: "100%",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <EmptyState
-                icon={FileText}
-                title="Open a document"
-                subtitle="Click any search result on the left to load the document and jump to the matching passage."
-              />
-            </div>
-          )}
-          {selectedResult && !pdfBlobUrl && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                marginTop: 80,
-                justifyContent: "center",
-              }}
-            >
-              <div
-                style={{
-                  width: 20,
-                  height: 20,
-                  border: `2px solid ${T.border}`,
-                  borderTopColor: T.amber,
-                  borderRadius: "50%",
-                  animation: "spin 0.8s linear infinite",
-                }}
-              />
-              <span style={{ fontSize: 12, color: T.inkFaint }}>
-                Loading document…
-              </span>
-            </div>
-          )}
-          {pdfBlobUrl && pageWidth > 0 && (
-            <Document
-              file={pdfBlobUrl}
-              onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 12,
-                }}
-              >
-                {Array.from({ length: numPages || 0 }, (_, i) => i + 1).map(
-                  (pageNum) => {
-                    const dims = pageDimensions[pageNum];
-                    const isTargetPage =
-                      selectedResult?.page_number === pageNum &&
-                      selectedResult?.pdf_id === loadedPdfId;
-                    const boxesToShow = isTargetPage ? activeBoxes : [];
-                    return (
-                      <div
-                        key={pageNum}
-                        ref={(el) => (pageRefs.current[pageNum] = el)}
-                        style={{
-                          position: "relative",
-                          borderRadius: 6,
-                          overflow: "hidden",
-                          boxShadow: isTargetPage
-                            ? `0 0 0 2px ${T.amber}, 0 4px 20px rgba(26,23,20,0.12)`
-                            : "0 2px 12px rgba(26,23,20,0.08)",
-                          transition: "box-shadow 0.25s",
-                        }}
-                      >
-                        <Page
-                          pageNumber={pageNum}
-                          width={pageWidth}
-                          renderTextLayer={true}
-                          renderAnnotationLayer={true}
-                          onLoadSuccess={(page) =>
-                            handlePageLoadSuccess(pageNum, page)
-                          }
-                        />
-                        {dims &&
-                          boxesToShow.map((box, idx) => {
-                            const scale = pageWidth / dims.width;
-                            return (
-                              <div
-                                key={idx}
-                                className="highlight-box"
-                                style={{
-                                  left: box.x0 * scale,
-                                  top: box.y0 * scale,
-                                  width: (box.x1 - box.x0) * scale,
-                                  height: (box.y1 - box.y0) * scale,
-                                }}
-                              />
-                            );
-                          })}
-                      </div>
-                    );
-                  },
-                )}
-              </div>
-            </Document>
-          )}
-        </div>
-      </>
-    );
-  }
 
   return (
     <>
@@ -787,7 +770,7 @@ export default function MainApp({ user, onSignOut }) {
                   whiteSpace: "nowrap",
                 }}
               >
-                {user.email}
+                {user?.email ?? ""}
               </span>
             )}
 
@@ -802,10 +785,9 @@ export default function MainApp({ user, onSignOut }) {
               }}
             >
               <Library size={12} />
-              <span className="desktop-only" style={{ display: "inline" }}>My PDFs</span>
+              <span className="desktop-only">My PDFs</span>
             </button>
 
-            {/* Upload PDF button */}
             <button
               onClick={() => fileInputRef.current.click()}
               disabled={!!uploadStatus}
@@ -821,7 +803,6 @@ export default function MainApp({ user, onSignOut }) {
               <span>PDF</span>
             </button>
 
-            {/* Upload Folder button */}
             <button
               onClick={() => folderInputRef.current.click()}
               disabled={!!uploadStatus}
@@ -834,7 +815,7 @@ export default function MainApp({ user, onSignOut }) {
               }}
             >
               <FolderOpen size={12} />
-              <span className="desktop-only" style={{ display: "inline" }}>Folder</span>
+              <span className="desktop-only">Folder</span>
             </button>
 
             {user && (
@@ -849,7 +830,7 @@ export default function MainApp({ user, onSignOut }) {
                 }}
               >
                 <LogOut size={12} />
-                <span className="desktop-only" style={{ display: "inline" }}>Sign out</span>
+                <span className="desktop-only">Sign out</span>
               </button>
             )}
 
@@ -883,8 +864,7 @@ export default function MainApp({ user, onSignOut }) {
             position: "relative",
           }}
         >
-          {/* ── LEFT SIDEBAR (results panel) ── */}
-          {/* On mobile: full-width, hidden when viewer is open */}
+          {/* ── LEFT SIDEBAR ── */}
           <aside
             style={{
               width: isMobile ? "100%" : 320,
@@ -1083,11 +1063,9 @@ export default function MainApp({ user, onSignOut }) {
           </aside>
 
           {/* ── RIGHT PANEL (PDF viewer) ── */}
-          {/* Desktop: always visible beside sidebar */}
-          {/* Mobile: full-screen sheet when mobileView === "viewer" */}
           {(!isMobile || mobileView === "viewer") && (
             <div
-              className={isMobile ? "mobile-viewer-sheet slide-up" : ""}
+              className={isMobile ? "slide-up" : ""}
               style={
                 isMobile
                   ? {
@@ -1107,7 +1085,21 @@ export default function MainApp({ user, onSignOut }) {
                     }
               }
             >
-              <PDFViewerContent />
+              <PDFViewerContent
+                isMobile={isMobile}
+                setMobileView={setMobileView}
+                selectedResult={selectedResult}
+                pdfBlobUrl={pdfBlobUrl}
+                pageWidth={pageWidth}
+                numPages={numPages}
+                pageDimensions={pageDimensions}
+                loadedPdfId={loadedPdfId}
+                activeBoxes={activeBoxes}
+                viewerRef={viewerRef}
+                viewerWidthRef={viewerWidthRef}
+                pageRefs={pageRefs}
+                handlePageLoadSuccess={handlePageLoadSuccess}
+              />
             </div>
           )}
 
@@ -1121,7 +1113,6 @@ export default function MainApp({ user, onSignOut }) {
                 display: "flex",
               }}
             >
-              {/* Backdrop */}
               <div
                 onClick={() => setLibraryOpen(false)}
                 style={{
@@ -1131,8 +1122,6 @@ export default function MainApp({ user, onSignOut }) {
                   backdropFilter: "blur(2px)",
                 }}
               />
-
-              {/* Panel */}
               <div
                 style={{
                   position: "relative",
@@ -1145,7 +1134,6 @@ export default function MainApp({ user, onSignOut }) {
                   animation: "slideIn 0.25s ease",
                 }}
               >
-                {/* Panel header */}
                 <div
                   style={{
                     padding: "16px 18px",
@@ -1186,14 +1174,12 @@ export default function MainApp({ user, onSignOut }) {
                       alignItems: "center",
                       padding: 4,
                       borderRadius: 6,
-                      transition: "color 0.15s",
                     }}
                   >
                     <X size={16} />
                   </button>
                 </div>
 
-                {/* PDF list */}
                 <div
                   style={{
                     flex: 1,
@@ -1204,14 +1190,8 @@ export default function MainApp({ user, onSignOut }) {
                     gap: 8,
                   }}
                 >
-                  {pdfsLoading && (
-                    <>
-                      {[1, 2, 3].map((i) => (
-                        <SkeletonCard key={i} />
-                      ))}
-                    </>
-                  )}
-
+                  {pdfsLoading &&
+                    [1, 2, 3].map((i) => <SkeletonCard key={i} />)}
                   {!pdfsLoading && myPdfs.length === 0 && (
                     <EmptyState
                       icon={Library}
@@ -1219,7 +1199,6 @@ export default function MainApp({ user, onSignOut }) {
                       subtitle="Upload a PDF or folder to get started."
                     />
                   )}
-
                   {!pdfsLoading &&
                     myPdfs.map((pdf) => (
                       <div key={pdf.id} className="pdf-item">
@@ -1260,7 +1239,7 @@ export default function MainApp({ user, onSignOut }) {
                             }}
                           >
                             {pdf.total_pages} pages ·{" "}
-                            {pdf.upload_date?.slice(0, 10)}
+                            {pdf.upload_date?.slice(0, 10) ?? ""}
                           </p>
                         </div>
                         <button
@@ -1288,7 +1267,6 @@ export default function MainApp({ user, onSignOut }) {
                     ))}
                 </div>
 
-                {/* Upload from panel */}
                 <div
                   style={{
                     padding: "12px 14px",
